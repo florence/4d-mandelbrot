@@ -96,7 +96,8 @@
         (for/vector : (Vectorof Pict3D) #:length 100 ([k : Positive-Fixnum (in-range 1 101)])
           (define α (fl/ (fl k) 100.0))
           (define col (fl- 1.0 α))
-          (define colv (flvector col 0.0 0.0 α))
+          (define colv (flvector 1.0 #;col 0.0 0.0 α
+                        ))
           (with-color (rgba colv)
             (with-emitted (emitted colv 1)
               (cube origin step-size)))))
