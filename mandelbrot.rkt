@@ -66,13 +66,15 @@
 (: render-at-passes : (∀ (A) (Positive-Fixnum
                               Flonum Flonum
                               Integer
+                              Integer
                               (Flonum Pict3D A -> A)
                               A
                               -> A)))
-(define (render-at-passes n s e samples make init)
+(define (render-at-passes n s e samples time-samples make init)
   (define start (fl s))
   (define end (fl e))
   (define steps (fl samples))
+  (define time-steps (fl time-samples))
   (define base
     (freeze
      (let ([seq (list (sub1 start) (add1 end))])
@@ -90,31 +92,34 @@
                               #:specular 0.39
                               #:roughness 0.0)])
       (define step-size (/ (- end start) steps))
+      (define time-size (/ (- end start) time-steps))
       (define cube-size (/ step-size 2))
       (: cache : (Vectorof Pict3D))
       (define cache
-        (for/vector : (Vectorof Pict3D) #:length 100 ([k : Positive-Fixnum (in-range 1 101)])
-          (define α (fl/ (fl k) 100.0))
-          (define col (fl- 1.0 α))
-          (define colv (flvector 1.0 #;col 0.0 0.0 α
-                        ))
+        (for/vector : (Vectorof Pict3D) #:length 200 ([k : Positive-Fixnum (in-range 1 201)])
+          (define α (fl/ (fl k) 200.0))
+          (define col (fl- 1.0 α) #;(max (fl- 1.0 α) 0.5)
+            )
+          (define colv
+            (flvector col 0.0 0.0 α))
           (with-color (rgba colv)
             (with-emitted (emitted colv 1)
               (cube origin step-size)))))
       (define-syntax-rule (point α_raw)
         (let ()
-          (define col (fllog α_raw))
+          (define col (max α_raw 0.1) #;(fl/ (fllog α_raw) (fllog 1.7))
+            )
           (define α (fl- 1.0 col))
           (and
            (fl>= α .01)
            (vector-ref cache
                        (if (fl>= α 1.0)
-                           99
-                           (fx- (fl->fx (floor (fl* 100.0 α)))
+                           199
+                           (fx- (fl->fx (floor (fl* 200.0 α)))
                                 1))))))
       (define f (aprox-mandel n))
       (for/fold : A ([res : A init])
-                ([x : Flonum (in-range start end step-size)])
+                ([x : Flonum (in-range start end time-size)])
         ;(printf "rendering timestep ~a\n" r)
         (make
          x
@@ -137,7 +142,7 @@
                Integer
                -> Void))
 (define (rotatory n start end steps)
-  (define worlds (map freeze (render-at-passes n start end steps
+  (define worlds (map freeze (render-at-passes n start end steps steps
                                                (lambda (_ [a : Pict3D] [r : (Listof Pict3D)])
                                                  (cons a r))
                                                null)))
@@ -179,10 +184,12 @@
                Flonum Flonum
                Integer)
               (Integer
+               #:time-steps Positive-Fixnum
                #:width Nonnegative-Integer
                #:height Nonnegative-Integer)
               Void))
 (define (render! path n start end steps [delay DELAY]
+                 #:time-steps [time-steps steps]
                  #:width [width (current-pict3d-width)]
                  #:height [height (current-pict3d-height)])
   (parameterize ([current-pict3d-width width]
@@ -200,7 +207,7 @@
          (define stream (gif-start p w h 0 #f))
          (gif-add-loop-control stream 0)
          (render-at-passes
-          n start end steps
+          n start end steps time-steps
           (lambda ([r : Flonum] [pict : Pict3D] _)
             (define btmp (pict3d->bitmap (combine (rot (fl* 360.0 r) pict) camera)))
             (define-values (pxls colormap transparent)
@@ -213,6 +220,53 @@
             (gif-add-control stream 'any #f delay transparent)
             (gif-add-image stream 0 0 w h #f colormap pxls))
           (void))
+         (gif-end stream))))))
+
+(provide render-single!)
+(: render-single! : (->*
+              (Path-String
+               Positive-Fixnum
+               Flonum Flonum
+               Integer)
+              (Integer
+               #:time-steps Positive-Fixnum
+               #:width Nonnegative-Integer
+               #:height Nonnegative-Integer)
+              Void))
+(define (render-single! path n start end steps [delay DELAY]
+                 #:time-steps [time-steps steps]
+                 #:width [width (current-pict3d-width)]
+                 #:height [height (current-pict3d-height)])
+  (parameterize ([current-pict3d-width width]
+                 [current-pict3d-height height])
+    (define outside (* 1 (max (abs start) (abs end))))
+    (define camera-start (pos (- outside) outside outside))
+    (define camera (basis 'camera (point-at camera-start origin)))
+    (parameterize ([current-pict3d-background (rgba "white")])
+      (call-with-output-file*
+       path #:exists 'replace
+       (lambda ([p : Output-Port])
+         (define count 0)
+         (define w (current-pict3d-width))
+         (define h (current-pict3d-height))
+         (define stream (gif-start p w h 0 #f))
+         (gif-add-loop-control stream 0)
+         (define pict
+           (render-at-passes
+            n start end steps time-steps
+            (lambda (_ [pict : Pict3D] [base : Pict3D])
+              (combine pict base))
+            empty-pict3d))
+         (define btmp (pict3d->bitmap (combine pict camera)))
+         (define-values (pxls colormap transparent)
+           (let ([argb (make-bytes (* w h 4) 255)]
+                 [mask (send btmp get-loaded-mask)])
+             (send btmp get-argb-pixels 0 0 w h argb)
+             (when mask
+               (send mask get-argb-pixels 0 0 w h argb #t))
+             (quantize argb)))
+         (gif-add-control stream 'any #f delay transparent)
+         (gif-add-image stream 0 0 w h #f colormap pxls)
          (gif-end stream))))))
 
 (: rot : Flonum Pict3D -> Pict3D)
